@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+
+. "./utility.sh"
+
+NIXY_CONFIG="${NIXY_CONFIG:-${HOME}/.config/nixy/nix.env}"
+NIXY_BASE='
+with import <nixpkgs> {};[
+]'
+
+NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM="${NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM:-1}"
+
+
+function create_nix_file() {
+    echo "create a baseline nix.env file if none exists"   
+    echo "${NIXY_BASE}" > "$NIXY_CONFIG"
+}
+
+function install() {
+    if is_empty "${1:-}"; then
+        log "${BOLD}Nixy:${RESET} install all packages"
+    else 
+        log "${BOLD}Nixy:${RESET} install specific packages"
+        log "${DIM} - installing $# package(s): $*"
+
+    fi
+}
+
+function remove() {
+    echo "remove package"
+}
+
+# upgrade
+#
+# upgrade to the latest NixPkgs
+function upgrade() {
+    local -ra params=( "$@" )
+    log "${BOLD}Nix Upgrade${RESET}"
+    log ""
+    log "The upgrade operation creates a new user environment, based on the current generation of
+the active profile, in which all store paths are replaced for which there are newer
+versions in the set of paths described by args. Paths for which there are no newer versions
+are left untouched; this is not an error. It is also not an error if an element of args
+matches no installed derivations."
+    log ""
+
+    if text_confirm "Continue?"; then
+        log "Running: ${BLUE}nix-env ${BOLD}upgrade${NO_BOLD}${RESET} ${params[*]} ${DIM}( ${ITALIC}with NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM=${NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM} )"
+        log ""
+        if eval "NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM=${NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM} nix-env --upgrade ${params[*]}"; then
+            log ""
+            log "- completed upgrade of NixPkgs; all looks good"
+            log ""
+
+            exit
+        else
+            log ""
+            log "- 💩 some issues reported while running: ${BLUE}nix-cmd ${BOLD}upgrade${NO_BOLD} ${params[*]}${RESET}"
+            log "- Note: if you see messsages about something you've already installed not being"
+            log "  supported under darwin we ${ITALIC}might${RESET} be able to fix this by installing each package you have"
+            log "  installed with their versions stripped off."
+            log ""
+            
+
+            if text_confirm "Would you like to try this?"; then
+                # shellcheck disable=SC2207
+                local -ra pkgs=( $(nix-env -q | rg -o '^([a-zA-Z-]+)[.-](?:[\d.-]+)*' --replace '--attr nixpkgs.$1' | sed -e 's/-i/I/g;s/-min/Min/g;s/nss-//g;s/-unstable//g') )
+                log "Running: ${BLUE}nix-env ${BOLD}upgrade${NO_BOLD}${RESET} ${DIM}${pkgs[*]}"
+                log ""
+                if eval "NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM=${NIXPKGS_ALLOW_UNSUPPORTED_SYSTEM} nix-env --upgrade ${pkgs[*]}"; then
+                    log ""
+                    log "- Successful upgrade!"
+                    log ""
+
+                    exit 0
+                else
+                    log ""
+                    log "- 💩 still seeing some errors in the upgrade process"
+                    log ""
+
+                    exit 1
+                fi
+
+            else 
+                log ""
+                exit 1
+            fi  
+
+        fi
+    fi
+}
+
+function list_generations() {
+    nix-env --list-generations
+}
+
+function delete_generations() {
+    log ""
+    log "${BOLD}Nixy:${RESET} delete generations"
+    log ""
+
+    if is_empty "${1:-}"; then
+        log "This operation deletes the specified generations of the current profile."
+        log "The generations which are deleted depend on the parameters you provide:"
+        log ""
+        log "- <${BOLD}number${RESET}> deletes the specific generations expressed by the generations id number "
+        log "  found in 'nixy generations'"
+        log "- <${BOLD}old${RESET}> all generations ${ITALIC}other${RESET} than the present generation"
+        log "- <${BOLD}30d${RESET}> all generations older than ${BOLD}${ITALIC}x${RESET} days"
+        log "- <${BOLD}+5${RESET}> keeps the last ${BOLD}${ITALIC}x${RESET} generations; removing the rest"
+        log ""
+        exit 0
+    else 
+        log "Running: ${BLUE}nix-env ${BOLD}--delete-generations $*${RESET}"
+        if eval "nix-env --delete-generations $*"; then
+            log ""
+            log "- successfully pruned generations but to actually free up disk space you must run"
+            log "  ${BOLD}nix-collect-garbage${RESET};"
+            log ""
+            if confirm_text "Do that now?"; then
+                nix-collect-garbage
+            fi
+        fi
+    fi
+}
+
+function list_packages() {
+    log ""
+    log "${BOLD}Nixy:${RESET} list packages"
+}
+
+function help() {
+    log ""
+    log "${BOLD}Nixy${RESET} help"
+    log "--------------------------------"
+    log ""
+    log "${BOLD}nixy${RESET} [cmd] ${DIM}[...params]${RESET}"
+    log ""
+    log "where commands are:"
+    log "- install ${DIM}<pkg>${RESET}"
+    log "- uninstall ${DIM}<pkg>${RESET}"
+    log "- list "
+    log "- upgrade"
+    log "- generations"
+    log "- cleanup"
+}
+
+catch_errors
+
+CMD=$(lc "${1:-help}")
+if ! is_empty "${1:-}"; then
+    shift 1
+fi
+
+case "$CMD" in
+    install) install "$@";;
+    uninstall) remove "$@";;
+    upgrade) upgrade "$@";;
+    list) list_packages;;
+    generations) list_generations "$@";;
+    cleanup) delete_generations "$@";;
+    help) help "$@";;
+esac
+
